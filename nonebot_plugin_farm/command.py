@@ -469,42 +469,53 @@ async def _(session: Uninfo):
     if not await g_pToolManager.isRegisteredByUid(uid):
         return
 
+    # 判断签到是否正常加载
     if not g_bSignStatus:
         await MessageUtils.build_message(g_sTranslation["signIn"]["error"]).send()
+
         return
 
     toDay = g_pToolManager.dateTime().date().today()
-    sign_date_str = toDay.strftime("%Y-%m-%d")
-    
-    status = await g_pDBService.userSign.sign(uid, sign_date_str)
-
     message = ""
-    
+    status = await g_pDBService.userSign.sign(uid, toDay.strftime("%Y-%m-%d"))
+
+    # 如果完成签到
     if status == 1 or status == 2:
+        # 获取签到总天数
         signDay = await g_pDBService.userSign.getUserSignCountByDate(
             uid, toDay.strftime("%Y-%m")
         )
-        
         exp, point = await g_pDBService.userSign.getUserSignRewardByDate(
-            uid, sign_date_str
+            uid, toDay.strftime("%Y-%m-%d")
         )
-        
-        continuous_days = 0
-        summary = await g_pDBService.userSign.getUserSignSummary(uid) # 假设你有这个get方法，如果没有需自行查询
-        if summary:
-            continuous_days = summary["continuousDays"]
 
         message += g_sTranslation["signIn"]["success"].format(
             day=signDay, exp=exp, num=point
         )
-        
-        if continuous_days > 1:
-            message += f"\n(已连续签到 {continuous_days} 天，奖励已提升！)"
-        
-        if status == 2:
-             message += "\n(今天已经签到过了哦)"
 
-    elif status == 0:
+        reward = g_pJsonManager.m_pSign["continuou"].get(f"{signDay}", None)
+
+        if reward:
+            extraPoint = reward.get("point", 0)
+            extraExp = reward.get("exp", 0)
+
+            plant = reward.get("plant", {})
+
+            message += g_sTranslation["signIn"]["grandTotal"].format(
+                exp=extraExp, num=extraPoint
+            )
+
+            vipPoint = reward.get("vipPoint", 0)
+
+            if vipPoint > 0:
+                message += g_sTranslation["signIn"]["grandTotal1"].format(num=vipPoint)
+
+            if plant:
+                for key, value in plant.items():
+                    message += g_sTranslation["signIn"]["grandTotal2"].format(
+                        name=key, num=value
+                    )
+    else:
         message = g_sTranslation["signIn"]["error1"]
 
     await MessageUtils.build_message(message).send()
