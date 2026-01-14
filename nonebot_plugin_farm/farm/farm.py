@@ -549,18 +549,18 @@ class CFarmManager:
                 if currentTime >= matureTime:
                     number = plantInfo["harvest"]
 
-                    # 处理偷菜扣除数量
-                    stealNum = await g_pDBService.userSteal.getTotalStolenCount(uid, i)
-                    number -= stealNum
-
                     # 处理土地等级带来的数量增长 向下取整
                     percent = await g_pDBService.userSoil.getSoilLevelHarvestNumber(
                         level
                     )
                     number = math.floor(number * (100 + percent) // 100)
 
+                    # 处理偷菜扣除数量
+                    stealNum = await g_pDBService.userSteal.getTotalStolenCount(uid, i)
+                    number -= stealNum
+
                     if number <= 0:
-                        continue
+                        number = 1  # 强制收获1个，防止被偷光无法收获
 
                     harvestCount += 1
                     experience += plantInfo["experience"]
@@ -587,6 +587,7 @@ class CFarmManager:
                             uid, i, "wiltStatus", 1
                         )
                     else:
+                        await g_pDBService.userSteal.deleteStealRecord(uid, i)
                         phase = await g_pDBService.plant.getPlantPhaseByName(
                             soilInfo["plantName"]
                         )
@@ -595,15 +596,17 @@ class CFarmManager:
                             int(currentTime.timestamp()),
                             soilInfo["harvestCount"] + 1,
                         )
-                        p1, p2, *rest = phase
+                        # p1, p2, *rest = phase
+                        current_progress = phase[2] if len(phase) > 2 else 0  # 保留进度至第三阶段
+                        total_maturity = phase[-1] if len(phase) > 0 else 0  # 总成熟时间
 
                         await g_pDBService.userSoil.updateUserSoilFields(
                             uid,
                             i,
                             {
                                 "harvestCount": hc,
-                                "plantTime": ts - p1 - p2,
-                                "matureTime": ts + p2 + sum(rest),
+                                "plantTime": ts - current_progress,
+                                "matureTime": ts + (total_maturity - current_progress),
                             },
                         )
 
@@ -657,7 +660,7 @@ class CFarmManager:
             if soilInfo.get("wiltStatus", 0) == 0:
                 continue
 
-            experience += 3
+            experience += 7  # 铲除荒废作物固定经验值
 
             if g_bIsDebug:
                 experience += 999
@@ -976,7 +979,7 @@ class CFarmManager:
             return g_sTranslation["soilInfo"]["error"]
 
         soilLevel = soilInfo.get("soilLevel", 0) + 1
-        if soilLevel >= g_iSoilLevelMax:
+        if soilLevel >= g_iSoilLevelMax + 1:
             return g_sTranslation["soilInfo"]["error1"]
 
         # 获取用户当前土地 的下一级土地 数量
@@ -1026,7 +1029,7 @@ class CFarmManager:
             return g_sTranslation["soilInfo"]["error"]
 
         soilLevel = soilInfo.get("soilLevel", 0) + 1
-        if soilLevel >= g_iSoilLevelMax:
+        if soilLevel >= g_iSoilLevelMax + 1:
             return g_sTranslation["soilInfo"]["error1"]
 
         countSoil = await g_pDBService.userSoil.countSoilByLevel(uid, soilLevel)

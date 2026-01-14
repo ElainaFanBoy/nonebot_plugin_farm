@@ -114,16 +114,9 @@ class CUserSignDB(CSqlManager):
 
     @classmethod
     async def sign(cls, uid: str, signDate: str = "") -> int:
-        """签到
-
-        Args:
-            uid (int): 用户ID
-            signDate (str): 日期字符串 'YYYY-MM-DD' 不传默认当前系统日期
-
-        Returns:
-            bool: 0: 签到失败 1: 签到成功 2: 重复签到
-        """
+        """签到 (基础随机 + 累积膨胀随机)"""
         try:
+            # --- 1. 初始化与校验 ---
             if not signDate:
                 signDate = g_pToolManager.dateTime().date().today().strftime("%Y-%m-%d")
 
@@ -131,76 +124,108 @@ class CUserSignDB(CSqlManager):
                 return 2
 
             todayStr = g_pToolManager.dateTime().date().today().strftime("%Y-%m-%d")
+            # 补签判定：如果不是今天，视为补签
             isSupplement = 0 if signDate == todayStr else 1
 
-            expMax, expMin, pointMax, pointMin = [
-                g_pJsonManager.m_pSign.get(key, default)
-                for key, default in (
-                    ("exp_max", 50),
-                    ("exp_min", 5),
-                    ("point_max", 2000),
-                    ("point_min", 200),
-                )
-            ]
+            # --- 2. 预读取数据以计算连续天数 ---
+            # 我们需要先知道通过这次签到，连续天数会变成多少，从而计算奖励
+            async with cls.m_pDB.execute(
+                "SELECT * FROM userSignSummary WHERE uid=?", (uid,)
+            ) as cursor:
+                summary_row = await cursor.fetchone()
 
-            exp = random.randint(expMin, expMax)
-            point = random.randint(pointMin, pointMax)
-            vipPoint = 0
+            # 计算本次签到后的连续天数 (current_continuous_days)
+            current_continuous_days = 1
+            if summary_row and not isSupplement:
+                last_date = summary_row["lastSignDate"]
+                # 计算昨天的日期
+                prev_date = (
+                    g_pToolManager.dateTime().strptime(signDate, "%Y-%m-%d")
+                    - timedelta(days=1)
+                ).strftime("%Y-%m-%d")
+                
+                # 如果上次签到是昨天，则连续天数+1
+                if last_date == prev_date:
+                    current_continuous_days = summary_row["continuousDays"] + 1
 
+            # --- 3. 奖励计算逻辑 (核心修改) ---
+            
+            # A. 基础奖励 (固定随机范围)
+            base_exp = random.randint(5, 50)
+            base_point = random.randint(200, 2000)
+
+            # B. 累积奖励 (范围随天数扩大)
+            extra_exp = 0
+            extra_point = 0
+
+            if current_continuous_days > 1 and not isSupplement:
+                # 设置上限，比如连续签到30天后，奖励范围不再扩大，防止数值崩坏
+                days_factor = min(current_continuous_days, 30)
+
+                # 算法设计：
+                # 经验加成：下限 = (天数-1)*8, 上限 = (天数-1)*11
+                # 第一天(无加成): 0
+                # 第二天: 8 ~ 11 (范围差3)
+                # 第三天: 16 ~ 22 (范围差6)
+                # 第十天: 54 ~ 95 (范围差41)
+                # 第30天: 174 ~ 319 (范围差145)
+                extra_exp_min = (days_factor - 1) * 8
+                extra_exp_max = (days_factor - 1) * 11
+                extra_exp = random.randint(extra_exp_min, extra_exp_max)
+
+                # 积分加成：同理放大
+                extra_point_min = (days_factor - 1) * 500
+                extra_point_max = (days_factor - 1) * 1000
+                extra_point = random.randint(extra_point_min, extra_point_max)
+
+            # C. 汇总最终奖励
+            final_exp = base_exp + extra_exp
+            final_point = base_point + extra_point
+
+            # 如果是补签，通常奖励减半或者没有额外奖励，这里简单做个减半处理
+            if isSupplement:
+                final_exp = int(final_exp * 0.5)
+                final_point = int(final_point * 0.5)
+
+            # --- 4. 数据库写入 (事务) ---
             async with cls._transaction():
+                # 写入日志 (存总数)
                 await cls.m_pDB.execute(
                     "INSERT INTO userSignLog (uid, signDate, isSupplement, exp, point) VALUES (?, ?, ?, ?, ?)",
-                    (uid, signDate, isSupplement, exp, point),
+                    (uid, signDate, isSupplement, final_exp, final_point),
                 )
 
-                cursor = await cls.m_pDB.execute(
-                    "SELECT * FROM userSignSummary WHERE uid=?", (uid,)
-                )
-                row = await cursor.fetchone()
-
+                # 更新汇总表
                 currentMonth = signDate[:7]
-                if row:
+                if summary_row:
                     monthSignDays = (
-                        row["monthSignDays"] + 1
-                        if row["currentMonth"] == currentMonth
+                        summary_row["monthSignDays"] + 1
+                        if summary_row["currentMonth"] == currentMonth
                         else 1
                     )
-                    totalSignDays = row["totalSignDays"]
-                    lastDate = row["lastSignDate"]
-                    prevDate = (
-                        g_pToolManager.dateTime().strptime(signDate, "%Y-%m-%d")
-                        - timedelta(days=1)
-                    ).strftime("%Y-%m-%d")
-                    continuousDays = (
-                        row["continuousDays"] + 1 if lastDate == prevDate else 1
-                    )
+                    totalSignDays = summary_row["totalSignDays"] + 1
+                    # 注意：supplementCount 逻辑保留原样
                     supplementCount = (
-                        row["supplementCount"] + 1
+                        summary_row["supplementCount"] + 1
                         if isSupplement
-                        else row["supplementCount"]
+                        else summary_row["supplementCount"]
                     )
+                    
+                    # 更新
                     await cls.m_pDB.execute(
                         """
                         UPDATE userSignSummary
-                        SET totalSignDays=totalSignDays+1,
-                            currentMonth=?,
-                            monthSignDays=?,
-                            lastSignDate=?,
-                            continuousDays=?,
-                            supplementCount=?
+                        SET totalSignDays=?, currentMonth=?, monthSignDays=?, 
+                            lastSignDate=?, continuousDays=?, supplementCount=?
                         WHERE uid=?
                         """,
                         (
-                            currentMonth,
-                            monthSignDays,
-                            signDate,
-                            continuousDays,
-                            supplementCount,
-                            uid,
+                            totalSignDays, currentMonth, monthSignDays,
+                            signDate, current_continuous_days, supplementCount, uid
                         ),
                     )
                 else:
-                    totalSignDays = 1
+                    # 插入新用户记录
                     await cls.m_pDB.execute(
                         """
                         INSERT INTO userSignSummary
@@ -208,47 +233,20 @@ class CUserSignDB(CSqlManager):
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            uid,
-                            1,
-                            currentMonth,
-                            1,
-                            signDate,
-                            1,
-                            1 if isSupplement else 0,
+                            uid, 1, currentMonth, 1, signDate, 1, 
+                            1 if isSupplement else 0
                         ),
                     )
 
-            # 计算累签奖励
-            reward = g_pJsonManager.m_pSign["continuou"].get(f"{totalSignDays}", None)
+                # 发放实际奖励
+                currentExp = await g_pDBService.user.getUserExpByUid(uid)
+                await g_pDBService.user.updateUserExpByUid(uid, currentExp + final_exp)
 
-            if reward:
-                point += reward.get("point", 0)
-                exp += reward.get("exp", 0)
-                vipPoint = reward.get("vipPoint", 0)
-
-                plant = reward.get("plant", {})
-
-                if plant:
-                    for key, value in plant.items():
-                        await g_pDBService.userSeed.addUserSeedByUid(uid, key, value)
-
-            if g_bIsDebug:
-                exp += 9999
-
-            # 向数据库更新
-            currentExp = await g_pDBService.user.getUserExpByUid(uid)
-            await g_pDBService.user.updateUserExpByUid(uid, currentExp + exp)
-
-            currentPoint = await g_pDBService.user.getUserPointByUid(uid)
-            await g_pDBService.user.updateUserPointByUid(uid, currentPoint + point)
-
-            if vipPoint > 0:
-                currentVipPoint = await g_pDBService.user.getUserVipPointByUid(uid)
-                await g_pDBService.user.updateUserVipPointByUid(
-                    uid, currentVipPoint + vipPoint
-                )
+                currentPoint = await g_pDBService.user.getUserPointByUid(uid)
+                await g_pDBService.user.updateUserPointByUid(uid, currentPoint + final_point)
 
             return 1
+            
         except Exception as e:
             logger.warning("执行签到失败", e=e)
             return 0
