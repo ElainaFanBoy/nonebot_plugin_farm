@@ -134,8 +134,8 @@ g_sTranslation = {
 
 
 class Config(BaseModel):
-    farm_draw_quality: str = "low"
-    farm_server_url: str = "http://diuse.work"
+    farm_draw_quality: str = "original"
+    farm_server_url: str = ""
 
 
 g_pConfigManager = get_plugin_config(Config)
