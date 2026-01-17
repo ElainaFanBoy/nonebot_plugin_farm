@@ -307,7 +307,7 @@ async def _(session: Uninfo):
     # 2. 判断逻辑
     # 如果有未成熟作物，需要确认
     if state["immature"] > 0:
-        confirm_msg = g_sTranslation["eradicate"]["confirm"].format(num=state["immature"])
+        confirm_msg = f"您即将铲除未成熟作物，数量为{state['immature']}个，是否确认？\n回复“是”确认，否则取消。 🚜"
         
         await MessageUtils.build_message(confirm_msg).send(reply_to=True)
 
@@ -318,7 +318,7 @@ async def _(session: Uninfo):
         resp = await check.wait(timeout=30) # 设置30秒超时
         
         if resp is None:
-            await MessageUtils.build_message(g_sTranslation["eradicate"]["timeOut"]).send(reply_to=True)
+            await MessageUtils.build_message("等待铲除回复超时，请重试").send(reply_to=True)
             return
             
         if resp != "是":
@@ -527,9 +527,8 @@ async def _(session: Uninfo):
             )
         
         elif status == 2:
-            message += g_sTranslation["signIn"]["already"].format(
-                day=signDay
-            )
+            print(g_sTranslation["signIn"])
+            message += "📝 今日已签到，不需要再签到了捏 🌟"
 
         #reward = g_pJsonManager.m_pSign["continuou"].get(f"{signDay}", None)
 
