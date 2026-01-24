@@ -446,7 +446,7 @@ class CUserSoilDB(CSqlManager):
         percent = await cls.getSoilLevelTime(soilInfo.get("soilLevel", 0))
 
         # 处理土地等级带来的时间缩短
-        time = math.floor(time * (100 + percent) // 100)
+        time = math.floor(time * (100 - percent) // 100)
 
         matureTs = nowTs + time * 3600
 
@@ -503,89 +503,50 @@ class CUserSoilDB(CSqlManager):
 
         return ",".join(status)
 
+    # 土地属性配置
+    _SOIL_CONFIG = {
+        1: {"code": "red",          "text": "红土地",   "harvest": 10, "exp": 5,  "time": 0,  "luck": 0},
+        2: {"code": "black",        "text": "黑土地",   "harvest": 20, "exp": 10,  "time": 20, "luck": 0},
+        3: {"code": "gold",         "text": "金土地",   "harvest": 28, "exp": 28, "time": 20, "luck": 0},
+        4: {"code": "amethyst",     "text": "紫晶土地", "harvest": 30, "exp": 30, "time": 25, "luck": 1},
+        5: {"code": "aquamarine",   "text": "蓝晶土地", "harvest": 32, "exp": 32, "time": 28, "luck": 1},
+        6: {"code": "blackcrystal", "text": "黑晶土地", "harvest": 32, "exp": 40, "time": 28, "luck": 2},
+    }
+
+    # 草土地
+    _DEFAULT_SOIL = {"code": "default", "text": "草土地", "harvest": 10, "exp": 0, "time": 0, "luck": 0}
+
+    @classmethod
+    def _get_soil_data(cls, level: int) -> dict:
+        """[内部辅助] 获取配置数据，查不到则返回默认值"""
+        return cls._SOIL_CONFIG.get(level, cls._DEFAULT_SOIL)
+
     @classmethod
     async def getSoilLevel(cls, level: int) -> str:
-        """获取土地等级英文文本
-
-        Args:
-            level (int): 土地等级
-
-        Returns:
-            str:
-        """
-        if level == 1:
-            return "red"
-        elif level == 2:
-            return "black"
-        elif level == 3:
-            return "gold"
-
-        return "default"
+        """获取土地等级英文文本"""
+        return cls._get_soil_data(level)["code"]
 
     @classmethod
     async def getSoilLevelText(cls, level: int) -> str:
-        """获取土地等级中文文本
-
-        Args:
-            level (int): 土地等级
-
-        Returns:
-            str:
-        """
-        if level == 1:
-            return "红土地"
-        elif level == 2:
-            return "黑土地"
-        elif level == 3:
-            return "金土地"
-
-        return "草土地"
+        """获取土地等级中文文本"""
+        return cls._get_soil_data(level)["text"]
 
     @classmethod
     async def getSoilLevelHarvestNumber(cls, level: int) -> int:
-        """获取土地等级收获数量增加比例
-
-        Args:
-            level (int): 土地等级
-
-        Returns:
-            int:
-        """
-        if level == 2:
-            return 20
-        elif level == 3:
-            return 28
-
-        return 10
+        """获取土地等级收获数量增加比例"""
+        return cls._get_soil_data(level)["harvest"]
 
     @classmethod
     async def getSoilLevelHarvestExp(cls, level: int) -> int:
-        """获取土地等级收获经验增加比例
-
-        Args:
-            level (int): 土地等级
-
-        Returns:
-            int:
-        """
-        if level == 3:
-            return 28
-
-        return 0
+        """获取土地等级收获经验增加比例"""
+        return cls._get_soil_data(level)["exp"]
 
     @classmethod
     async def getSoilLevelTime(cls, level: int) -> int:
-        """获取土地等级播种减少时间消耗
+        """获取土地等级播种减少时间消耗"""
+        return cls._get_soil_data(level)["time"]
 
-        Args:
-            level (int): 土地等级
-
-        Returns:
-            int:
-        """
-        if level == 2:
-            return 20
-        elif level == 3:
-            return 20
-
-        return 0
+    @classmethod
+    async def getSoilLevelLuck(cls, level: int) -> int:
+        """获取土地等级幸运增加值"""
+        return cls._get_soil_data(level)["luck"]

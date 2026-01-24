@@ -136,15 +136,23 @@ class CUserSignDB(CSqlManager):
             expMax, expMin, pointMax, pointMin = [
                 g_pJsonManager.m_pSign.get(key, default)
                 for key, default in (
-                    ("exp_max", 260),
-                    ("exp_min", 80),
-                    ("point_max", 200000),
-                    ("point_min", 2000),
+                    ("exp_max", 360),
+                    ("exp_min", 50),
+                    ("point_max", 175000),
+                    ("point_min", 5000),
                 )
             ]
 
-            exp = random.randint(expMin, expMax)
-            point = random.randint(pointMin, pointMax)
+            def get_norm_value(min_v, max_v):
+                mu = (min_v + max_v) / 2
+                sigma = (max_v - min_v) / 4
+
+                val = random.gauss(mu, sigma)
+
+                return max(min_v, min(int(val), max_v + 75000)) 
+            
+            exp = get_norm_value(expMin, expMax)
+            point = get_norm_value(pointMin, pointMax)
             vipPoint = random.randint(4,6)
 
             async with cls._transaction():

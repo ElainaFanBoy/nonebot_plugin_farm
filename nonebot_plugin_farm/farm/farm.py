@@ -145,12 +145,21 @@ class CFarmManager:
 
         beginX = 309
         endX = 627
-        # 绘制宽度计算公式为 (当前经验值 / 经验值上限) * 宽度
-        width = int((level[2] / level[1]) * (endX - beginX))
+        # 1. 既然底层返回的是累计经验，我们在绘图层手动计算当前这一级的上限
+        # 根据 getUserLevelByUid 逻辑，每级增量为 200
+        level_step = 200
+        current_level_max_exp = (level[0] + 1) * level_step
+
+        # 2. 计算宽度：(当前持有经验 / 当前级上限) * 进度条总长
+        # 增加 min 限制防止溢出（比如经验刚好满时不会画出框）
+        percent_exp = level[2] / current_level_max_exp
+        width = int(min(percent_exp, 1.0) * (endX - beginX))
+        
         await img.rectangle((beginX, 188, beginX + width, 222), (171, 194, 41))
 
+        # 3. 修改文字显示：显示 "当前持有 / 当前级上限"
         expImg = await BuildImage.build_text_image(
-            f"{level[2]} / {level[1]}", size=24, font_color=(102, 120, 19)
+            f"{level[2]} / {current_level_max_exp}", size=24, font_color=(102, 120, 19)
         )
         await img.paste(expImg, (390, 193))
 
@@ -166,9 +175,9 @@ class CFarmManager:
         )
         await img.paste(pointImg, (330, 255))
 
-        # 点券 TODO
+        # 点券
         bondsImg = await BuildImage.build_text_image(
-            "0", size=24, font_color=(253, 253, 253)
+            str(userInfo.get("vipPoint", 0)), size=24, font_color=(253, 253, 253)
         )
         await img.paste(bondsImg, (570, 255))
 
@@ -216,9 +225,13 @@ class CFarmManager:
                     case 1:
                         name = "红土地.png"
                     case 2:
-                        name = "黑土地.png"
+                        name = "黑土地.png" 
                     case 3:
                         name = "金土地.png"
+                    case 4:
+                        name = "紫晶土地.png"
+                    case 5:
+                        name = "蓝晶土地.png"
                     case _:
                         name = "普通土地.png"
                 iconPath = g_sResourcePath / "soil" / name
