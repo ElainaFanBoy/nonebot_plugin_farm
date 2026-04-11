@@ -532,6 +532,9 @@ class CFarmManager:
             harvestRecords = []  # 收获日志记录
             experience = 0  # 总经验值
             harvestCount = 0  # 成功收获数量
+            
+            # 用于聚合相同作物的收获数据，避免刷屏
+            harvest_summary = {} 
 
             for i in range(1, soilNumber + 1):
                 soilInfo = await g_pDBService.userSoil.getUserSoil(uid, i)
@@ -560,38 +563,38 @@ class CFarmManager:
                 )
 
                 if currentTime >= matureTime:
-                    number = plantInfo["harvest"]
+                    plant_name = soilInfo["plantName"]
 
-                    # 处理土地等级带来的数量增长 向下取整
-                    percent = await g_pDBService.userSoil.getSoilLevelHarvestNumber(
-                        level
-                    )
-                    number = math.floor(number * (100 + percent) // 100)
-
-                    # 处理偷菜扣除数量
+                    # --- 1. 局部计算当前土地的收获数量 ---
+                    base_number = plantInfo["harvest"]
+                    num_percent = await g_pDBService.userSoil.getSoilLevelHarvestNumber(level)
+                    harvest_number = math.floor(base_number * (100 + num_percent) // 100)
+                    
                     stealNum = await g_pDBService.userSteal.getTotalStolenCount(uid, i)
-                    number -= stealNum
+                    harvest_number -= stealNum
+                    
+                    if harvest_number <= 0:
+                        harvest_number = 1  # 强制收获1个，防止被偷光无法收获
 
-                    if number <= 0:
-                        number = 1  # 强制收获1个，防止被偷光无法收获
+                    # --- 2. 局部计算当前土地的经验值 (修复指数级暴增Bug) ---
+                    base_exp = plantInfo["experience"]
+                    exp_percent = await g_pDBService.userSoil.getSoilLevelHarvestExp(level)
+                    current_gain_exp = math.floor(base_exp * (100 + exp_percent) // 100)
 
+                    # --- 3. 更新全局总计变量 ---
                     harvestCount += 1
-                    experience += plantInfo["experience"]
+                    experience += current_gain_exp
 
-                    # 处理土地等级带来的经验增长 向下取整
-                    percent = await g_pDBService.userSoil.getSoilLevelHarvestExp(level)
-                    experience = math.floor(experience * (100 + percent) // 100)
+                    # --- 4. 将数据记录到聚合字典中，暂不生成文本 ---
+                    if plant_name not in harvest_summary:
+                        harvest_summary[plant_name] = {"num": 0, "exp": 0}
+                        
+                    harvest_summary[plant_name]["num"] += harvest_number
+                    harvest_summary[plant_name]["exp"] += current_gain_exp
 
-                    harvestRecords.append(
-                        g_sTranslation["harvest"]["append"].format(
-                            name=soilInfo["plantName"],
-                            num=number,
-                            exp=plantInfo["experience"],
-                        )
-                    )
-
+                    # --- 更新用户背包和土地状态 ---
                     await g_pDBService.userPlant.addUserPlantByUid(
-                        uid, soilInfo["plantName"], number
+                        uid, plant_name, harvest_number
                     )
 
                     # 如果到达收获次数上限
@@ -601,15 +604,12 @@ class CFarmManager:
                         )
                     else:
                         await g_pDBService.userSteal.deleteStealRecord(uid, i)
-                        phase = await g_pDBService.plant.getPlantPhaseByName(
-                            soilInfo["plantName"]
-                        )
+                        phase = await g_pDBService.plant.getPlantPhaseByName(plant_name)
 
                         ts, hc = (
                             int(currentTime.timestamp()),
                             soilInfo["harvestCount"] + 1,
                         )
-                        # p1, p2, *rest = phase
                         current_progress = phase[2] if len(phase) > 2 else 0  # 保留进度至第三阶段
                         total_maturity = phase[-1] if len(phase) > 0 else 0  # 总成熟时间
 
@@ -624,9 +624,20 @@ class CFarmManager:
                         )
 
                     await g_pEventManager.m_afterHarvest.emit(  # type: ignore
-                        uid=uid, name=soilInfo["plantName"], num=number, soilIndex=i
+                        uid=uid, name=plant_name, num=harvest_number, soilIndex=i
                     )
 
+            # --- 5. 循环结束后，遍历聚合字典生成最终的精简日志 ---
+            for plant_name, summary_data in harvest_summary.items():
+                harvestRecords.append(
+                    g_sTranslation["harvest"]["append"].format(
+                        name=plant_name,
+                        num=summary_data["num"],
+                        exp=summary_data["exp"],
+                    )
+                )
+
+            # --- 6. 处理总经验结算 ---
             if experience > 0:
                 exp = await g_pDBService.user.getUserExpByUid(uid)
                 await g_pDBService.user.updateUserExpByUid(uid, exp + experience)
