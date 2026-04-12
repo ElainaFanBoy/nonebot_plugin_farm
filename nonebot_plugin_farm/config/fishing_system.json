@@ -1,0 +1,9 @@
+{
+  "version": 0.01,
+  "system": {
+    "dailyLimit": 10,
+    "cooldownSeconds": 20,
+    "defaultUseStrategy": "lowest_level",
+    "defaultEscapeRate": 0.2
+  }
+}

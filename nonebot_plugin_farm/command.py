@@ -24,6 +24,7 @@ from .config import g_bSignStatus, g_sTranslation
 from .dbService import g_pDBService
 from .farm.farm import g_pFarmManager
 from .farm.shop import g_pShopManager
+from .farm.fishing import g_pFishingManager
 from .json import g_pJsonManager
 from .tool import g_pToolManager
 
@@ -76,6 +77,12 @@ diuse_farm = on_alconna(
         Option("--all", action=store_true),
         Subcommand("detail", help_text="农场详述"),
         Subcommand("my-point", help_text="我的农场币"),
+        Subcommand("item-shop", Args["res?", MultiVar(str)], help_text="物品商店"),
+        Subcommand("buy-item", Args["name?", str]["num?", int], help_text="购买物品"),
+        Subcommand("my-item", help_text="我的物品"),
+        Subcommand("fishing", Args["name?", str], help_text="钓鱼"),
+        Subcommand("my-fish", help_text="我的鱼获"),
+        Subcommand("sell-fish", Args["name?", str]["num?", int], help_text="出售鱼产"),
         Subcommand("seed-shop", Args["res?", MultiVar(str)], help_text="种子商店"),
         Subcommand("buy-seed", Args["name?", str]["num?", int], help_text="购买种子"),
         Subcommand("my-seed", help_text="我的种子"),
@@ -149,6 +156,158 @@ async def _(session: Uninfo):
         g_sTranslation["basic"]["point"].format(point=point)
     ).send(reply_to=True)
 
+diuse_farm.shortcut(
+    "物品商店(.*?)",
+    command="我的农场",
+    arguments=["item-shop"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("item-shop")
+async def _(session: Uninfo, res: Match[tuple[str, ...]]):
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    if res.result is inspect._empty:
+        raw = []
+    else:
+        raw = res.result
+
+    filterKey: str | int | None = None
+    page: int = 1
+
+    if len(raw) >= 1 and raw[0] is not None:
+        first = raw[0]
+        if isinstance(first, str) and first.isdigit():
+            page = int(first)
+        else:
+            filterKey = first
+
+    if (
+        len(raw) >= 2
+        and raw[1] is not None
+        and isinstance(raw[1], str)
+        and raw[1].isdigit()
+    ):
+        page = int(raw[1])
+
+    if filterKey is None:
+        image = await g_pShopManager.getItemShopImage(page)
+    else:
+        image = await g_pShopManager.getItemShopImage(filterKey, page)
+
+    await MessageUtils.build_message(image).send(reply_to=True)
+
+
+diuse_farm.shortcut(
+    "购买物品(?P<name>.*?)",
+    command="我的农场",
+    arguments=["buy-item", "{name}"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("buy-item")
+async def _(
+    session: Uninfo, name: Match[str], num: Query[int] = AlconnaQuery("num", 1)
+):
+    if not name.available:
+        await MessageUtils.build_message(g_sTranslation["buyItem"]["notItem"]).finish(
+            reply_to=True
+        )
+
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    result = await g_pShopManager.buyItem(uid, name.result, num.result)
+    await MessageUtils.build_message(result).send(reply_to=True)
+
+
+diuse_farm.shortcut(
+    "我的物品",
+    command="我的农场",
+    arguments=["my-item"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("my-item")
+async def _(session: Uninfo):
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    result = await g_pFishingManager.getUserBaitByUid(uid)
+    await MessageUtils.build_message(result).send(reply_to=True)
+
+
+diuse_farm.shortcut(
+    "钓鱼(?P<name>.*?)",
+    command="我的农场",
+    arguments=["fishing", "{name}"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("fishing")
+async def _(
+    session: Uninfo, name: Query[str] = AlconnaQuery("name", "")
+):
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    result = await g_pFishingManager.fish(uid, name.result)
+    await MessageUtils.build_message(result).send(reply_to=True)
+
+
+diuse_farm.shortcut(
+    "我的鱼获",
+    command="我的农场",
+    arguments=["my-fish"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("my-fish")
+async def _(session: Uninfo):
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    result = await g_pFishingManager.getUserFishByUid(uid)
+    await MessageUtils.build_message(result).send(reply_to=True)
+
+
+diuse_farm.shortcut(
+    "出售鱼产(?P<name>.*?)",
+    command="我的农场",
+    arguments=["sell-fish", "{name}"],
+    prefix=True,
+)
+
+
+@diuse_farm.assign("sell-fish")
+async def _(
+    session: Uninfo, name: Match[str], num: Query[int] = AlconnaQuery("num", -1)
+):
+    uid = str(session.user.id)
+
+    if not await g_pToolManager.isRegisteredByUid(uid):
+        return
+
+    fish_name = name.result if name.available else ""
+    result = await g_pFishingManager.sellFishByUid(uid, fish_name, num.result)
+    await MessageUtils.build_message(result).send(reply_to=True)
+    
 
 diuse_farm.shortcut(
     "种子商店(.*?)",

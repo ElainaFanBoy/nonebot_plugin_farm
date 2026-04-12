@@ -845,6 +845,9 @@ class CFarmManager:
         isStealingNumber = 0
         isStealingPlant = 0
 
+        # 新增：用于聚合相同作物的偷菜数据，避免刷屏
+        steal_summary = {}
+
         for i in range(1, soilNumber + 1):
             soilInfo = await g_pDBService.userSoil.getUserSoil(target, i)
             if not soilInfo:
@@ -881,15 +884,16 @@ class CFarmManager:
                 randomNumber = min(randomNumber, stealingNumber)
 
                 if randomNumber > 0:
+                    plant_name = soilInfo["plantName"]
                     await g_pDBService.userPlant.addUserPlantByUid(
-                        uid, soilInfo["plantName"], randomNumber
+                        uid, plant_name, randomNumber
                     )
 
-                    harvestRecords.append(
-                        g_sTranslation["stealing"]["info"].format(
-                            name=soilInfo["plantName"], num=randomNumber
-                        )
-                    )
+                    # --- 修改点：将数据记录到聚合字典中，暂不生成文本 ---
+                    if plant_name not in steal_summary:
+                        steal_summary[plant_name] = 0
+                    
+                    steal_summary[plant_name] += randomNumber
 
                     isStealingPlant += 1
 
@@ -902,7 +906,7 @@ class CFarmManager:
                             )
                         else:
                             phase = await g_pDBService.plant.getPlantPhaseByName(
-                                soilInfo["plantName"]
+                                plant_name
                             )
 
                             ts, hc = (
@@ -921,13 +925,13 @@ class CFarmManager:
                                 },
                             )
 
-                            await g_pDBService.userSteal.addStealRecord(
-                                target,
-                                i,
-                                uid,
-                                randomNumber,
-                                int(g_pToolManager.dateTime().now().timestamp()),
-                            )
+                        await g_pDBService.userSteal.addStealRecord(
+                            target,
+                            i,
+                            uid,
+                            randomNumber,
+                            int(g_pToolManager.dateTime().now().timestamp()),
+                        )
 
                     else:
                         await g_pDBService.userSteal.addStealRecord(
@@ -937,6 +941,14 @@ class CFarmManager:
                             randomNumber,
                             int(g_pToolManager.dateTime().now().timestamp()),
                         )
+
+        # --- 循环结束后，遍历聚合字典生成最终的精简日志 ---
+        for plant_name, total_num in steal_summary.items():
+            harvestRecords.append(
+                g_sTranslation["stealing"]["info"].format(
+                    name=plant_name, num=total_num
+                )
+            )
 
         if isStealingPlant <= 0 and isStealingNumber <= 0:
             return g_sTranslation["stealing"]["noPlant"]
