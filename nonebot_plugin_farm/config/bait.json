@@ -1,0 +1,37 @@
+{
+  "version": 0.01,
+  "bait": {
+    "普通鱼饵": {
+      "name": "普通鱼饵",
+      "point": 50000,
+      "vipPoint": 0,
+      "unlockLevel": 5,
+      "baitLevel": 0,
+      "escapeRate": 0.2
+    },
+    "高级鱼饵": {
+      "name": "高级鱼饵",
+      "point": 200000,
+      "vipPoint": 0,
+      "unlockLevel": 20,
+      "baitLevel": 1,
+      "escapeRate": 0.2
+    },
+    "特级鱼饵": {
+      "name": "特级鱼饵",
+      "point": 600000,
+      "vipPoint": 0,
+      "unlockLevel": 40,
+      "baitLevel": 2,
+      "escapeRate": 0.2
+    },
+    "专家鱼饵": {
+      "name": "专家鱼饵",
+      "point": 0,
+      "vipPoint": 10,
+      "unlockLevel": 70,
+      "baitLevel": 3,
+      "escapeRate": 0.2
+    }
+  }
+}

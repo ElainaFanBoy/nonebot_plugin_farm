@@ -130,6 +130,39 @@ g_sTranslation = {
         "aquamarine": "增产+32% 经验+32% 时间-28% 幸运+1%",
         "blackcrystal": "增产+32% 经验+40% 时间-28% 幸运+2%",
     },
+        "itemShop": {
+        "empty": "📦 当前没有可售卖的物品",
+    },
+    "buyItem": {
+        "notItem": "🎣 请在指令后跟需要购买的物品名称",
+        "noLevel": "🔒 你的等级不够哦，暂时还不能购买这个物品",
+        "noPoint": "💰 你的农场币不够哦~",
+        "noVipPoint": "🎫 你的点券不够哦~",
+        "success": "✅ 成功购买{name} * {num}，剩余农场币：{point}，剩余点券：{vipPoint}",
+        "errorSql": "❌ 购买失败，执行数据库错误！",
+        "error": "❌ 购买出错！请检查物品名称！",
+    },
+    "fishing": {
+        "configError": "❌ 钓鱼配置加载失败，请联系管理员",
+        "noBait": "🪱 你没有可用的鱼饵，先去物品商店看看吧",
+        "cooldown": "⏳ 钓鱼太频繁了，请 {sec} 秒后再试",
+        "dailyLimit": "📅 你今天的钓鱼次数已经用完啦，明天再来吧",
+        "emptyPool": "❌ 当前鱼池为空，请联系管理员检查配置",
+        "noAvailableFish": "🎣 当前鱼饵暂无可钓鱼种，请提升等级后再来试试",
+        "consumeError": "❌ 扣除鱼饵失败，请稍后重试",
+        "drawError": "❌ 抽鱼失败，请联系管理员检查配置",
+        "escape": "🐟 你使用了{name}，静静等待了一会儿……可惜鱼逃走了",
+        "success": "🐟 你使用了{name}，静静等待后……\n哇！你钓到了一条【{fish}】！\n✨ 经验 +{exp}",
+        "successKing": "👑 你使用了{name}，水面忽然泛起异光！\n竟然钓到了一条【{fish}】！\n✨ 经验 +{exp}",
+    },
+    "sellFish": {
+        "no": "🤷‍♀️ 你的背包里没有可以出售的鱼",
+        "successAll": "💰 成功出售全部鱼获，获得农场币：{point}，当前农场币：{num}",
+        "success": "💰 成功出售{name}，获得农场币：{point}，当前农场币：{num}",
+        "error": "❌ 出售鱼获{name}出错：背包中不存在该鱼",
+        "error1": "❌ 出售鱼获{name}出错：数量不足",
+        "configError": "❌ 鱼类配置加载失败，请联系管理员",
+    },
 }
 
 

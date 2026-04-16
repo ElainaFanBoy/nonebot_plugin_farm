@@ -3,6 +3,7 @@ class CDBService:
     async def init(cls):
         from .database.plant import CPlantManager
         from .database.user import CUserDB
+        from .database.userFishingState import CUserFishingStateDB
         from .database.userItem import CUserItemDB
         from .database.userPlant import CUserPlantDB
         from .database.userSeed import CUserSeedDB
@@ -33,6 +34,9 @@ class CDBService:
 
         cls.userSign = CUserSignDB()
         await cls.userSign.initDB()
+
+        cls.userFishingState = CUserFishingStateDB()
+        await cls.userFishingState.initDB()
 
         # 迁移旧数据库
         await cls.userSoil.migrateOldFarmData()

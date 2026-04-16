@@ -5,6 +5,7 @@ from zhenxun_utils.image_utils import ImageTemplate
 
 from ..config import g_sResourcePath, g_sTranslation
 from ..dbService import g_pDBService
+from ..json import g_pJsonManager
 
 
 class CShopManager:
@@ -207,6 +208,126 @@ class CShopManager:
             return g_sTranslation["sellPlant"]["success1"].format(
                 name=name, point=totalPoint, num=currentPoint + totalPoint
             )
+    
+    @classmethod
+    async def getItemShopImage(
+        cls, filterKey: str | int | None = None, page: int = 1
+    ) -> bytes:
+        """
+        获取物品商店图片
+        支持：
+        - getItemShopImage(1)
+        - getItemShopImage("高级", 2)
+        """
+        bait_map = g_pJsonManager.m_pBait.get("bait", {})
+        if not bait_map:
+            result = await ImageTemplate.table_page(
+                "物品商店",
+                "当前没有可售卖的物品",
+                ["-", "物品名称", "农场币", "点券", "解锁等级", "鱼饵等级"],
+                [],
+            )
+            return result.pic2bytes()
+
+        # 兼容 getItemShopImage(page) 调用方式
+        if isinstance(filterKey, int):
+            page = filterKey
+            filterKey = None
+
+        keyword = ""
+        if isinstance(filterKey, str):
+            keyword = filterKey.strip()
+
+        all_rows: list[list] = []
+        for bait_name, bait_info in bait_map.items():
+            if keyword and keyword not in bait_name:
+                continue
+
+            all_rows.append(
+                [
+                    "",
+                    bait_name,
+                    int(bait_info.get("point", 0)),
+                    int(bait_info.get("vipPoint", 0)),
+                    int(bait_info.get("unlockLevel", 0)),
+                    int(bait_info.get("baitLevel", 0)),
+                ]
+            )
+
+        all_rows.sort(key=lambda x: (x[5], x[4], x[1]))
+
+        page_size = 10
+        total = len(all_rows)
+        total_page = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(page, total_page))
+
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_rows = all_rows[start:end]
+
+        sub_title = f"物品商店 第 {page}/{total_page} 页"
+        if keyword:
+            sub_title += f"｜筛选：{keyword}"
+
+        result = await ImageTemplate.table_page(
+            "物品商店",
+            sub_title,
+            ["-", "物品名称", "农场币", "点券", "解锁等级", "鱼饵等级"],
+            page_rows,
+        )
+        return result.pic2bytes()
+
+    @classmethod
+    async def buyItem(cls, uid: str, name: str, num: int = 1) -> str:
+        """购买物品（当前主要是鱼饵）"""
+        if not isinstance(name, str) or not name.strip():
+            return g_sTranslation["buyItem"]["notItem"]
+
+        if num <= 0:
+            num = 1
+
+        bait_map = g_pJsonManager.m_pBait.get("bait", {})
+        bait_info = bait_map.get(name)
+        if not bait_info:
+            return g_sTranslation["buyItem"]["error"]
+
+        # 用户等级
+        level_info = await g_pDBService.user.getUserLevelByUid(uid)
+        user_level = level_info[0] if isinstance(level_info, tuple) and len(level_info) >= 1 else 0
+        if user_level < int(bait_info.get("unlockLevel", 0)):
+            return g_sTranslation["buyItem"]["noLevel"]
+
+        need_point = int(bait_info.get("point", 0)) * num
+        need_vip_point = int(bait_info.get("vipPoint", 0)) * num
+
+        user_point = await g_pDBService.user.getUserPointByUid(uid)
+        user_vip_point = await g_pDBService.user.getUserVipPointByUid(uid)
+
+        if user_point < need_point:
+            return g_sTranslation["buyItem"]["noPoint"]
+
+        if user_vip_point < need_vip_point:
+            return g_sTranslation["buyItem"]["noVipPoint"]
+
+        # 扣钱
+        if not await g_pDBService.user.updateUserPointByUid(uid, user_point - need_point):
+            return g_sTranslation["buyItem"]["errorSql"]
+
+        if not await g_pDBService.user.updateUserVipPointByUid(uid, user_vip_point - need_vip_point):
+            # 这里不做回滚，先保持和现有 buySeed 的简洁风格一致
+            return g_sTranslation["buyItem"]["errorSql"]
+
+        # 入背包
+        item_key = f"bait:{name}"
+        if not await g_pDBService.userItem.addUserItemByUid(uid, item_key, num):
+            return g_sTranslation["buyItem"]["errorSql"]
+
+        return g_sTranslation["buyItem"]["success"].format(
+            name=name,
+            num=num,
+            point=user_point - need_point,
+            vipPoint=user_vip_point - need_vip_point,
+        )
 
 
 g_pShopManager = CShopManager()
