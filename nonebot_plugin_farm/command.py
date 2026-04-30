@@ -80,7 +80,7 @@ diuse_farm = on_alconna(
         Subcommand("item-shop", Args["res?", MultiVar(str)], help_text="物品商店"),
         Subcommand("buy-item", Args["name?", str]["num?", int], help_text="购买物品"),
         Subcommand("my-item", help_text="我的物品"),
-        Subcommand("fishing", Args["name?", str], help_text="钓鱼"),
+        Subcommand("fishing", Args["name?", str]["num?", int], help_text="钓鱼"),
         Subcommand("my-fish", help_text="我的鱼获"),
         Subcommand("sell-fish", Args["name?", str]["num?", int], help_text="出售鱼产"),
         Subcommand("seed-shop", Args["res?", MultiVar(str)], help_text="种子商店"),
@@ -248,23 +248,25 @@ async def _(session: Uninfo):
 
 
 diuse_farm.shortcut(
-    "钓鱼(?P<name>.*?)",
+    r"钓鱼(?:\s+(?P<name>\S+))?(?:\s+(?P<num>\d+))?",
     command="我的农场",
-    arguments=["fishing", "{name}"],
+    arguments=["fishing", "{name}", "{num}"],
     prefix=True,
 )
 
 
 @diuse_farm.assign("fishing")
 async def _(
-    session: Uninfo, name: Query[str] = AlconnaQuery("name", "")
+    session: Uninfo,
+    name: Query[str] = AlconnaQuery("name", ""),
+    num: Query[int] = AlconnaQuery("num", 1),
 ):
     uid = str(session.user.id)
 
     if not await g_pToolManager.isRegisteredByUid(uid):
         return
 
-    result = await g_pFishingManager.fish(uid, name.result)
+    result = await g_pFishingManager.fish(uid, name.result, num.result)
     await MessageUtils.build_message(result).send(reply_to=True)
 
 

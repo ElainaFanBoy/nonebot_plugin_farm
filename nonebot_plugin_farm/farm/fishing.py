@@ -41,6 +41,64 @@ class CFishingManager:
         return g_pJsonManager.m_pFishingSystem.get("system", {})
 
     @classmethod
+    def _get_current_time_tag(cls) -> str:
+        """根据当前服务器时间返回 morning / afternoon / night"""
+        now_dt = g_pToolManager.dateTime()
+        hour = now_dt.hour
+
+        if 6 <= hour < 12:
+            return "morning"
+        if 12 <= hour < 20:
+            return "afternoon"
+        return "night"
+
+    @classmethod
+    def _match_time_rule(cls, rule: str | None) -> bool:
+        """
+        判断当前时间是否满足鱼池时段规则
+        允许：
+        - all
+        - morning
+        - afternoon
+        - night
+        - ["morning", "night"] 这种 list
+        """
+        if not rule:
+            return True
+
+        current_tag = cls._get_current_time_tag()
+
+        if isinstance(rule, list):
+            return current_tag in rule or "all" in rule
+
+        if isinstance(rule, str):
+            return rule == "all" or rule == current_tag
+
+        return True
+
+    @classmethod
+    def _get_effective_king_rate(cls) -> float:
+        """
+        鱼王独立概率：
+        - 默认 0.8%
+        - 未来活动可通过 kingRate / kingRateMultiplier 调整
+        例如：
+            kingRate = 0.012
+        或：
+            kingRateMultiplier = 2
+        """
+        system_map = cls._get_system_map()
+        base_rate = float(system_map.get("kingRate", 0.008))
+        multiplier = float(system_map.get("kingRateMultiplier", 1.0))
+        effective_rate = base_rate * multiplier
+
+        if effective_rate < 0:
+            effective_rate = 0.0
+        if effective_rate > 1:
+            effective_rate = 1.0
+        return effective_rate
+
+    @classmethod
     async def resolve_bait(cls, uid: str, bait_name: str = "") -> dict | None:
         """
         解析本次钓鱼要使用的鱼饵
@@ -120,25 +178,185 @@ class CFishingManager:
         return usable_baits[0]
 
     @classmethod
-    async def fish(cls, uid: str, bait_name: str = "") -> str:
+    async def _split_pool(cls, use_bait_name: str, user_level: int) -> tuple[dict | None, list[dict]]:
         """
-        执行一次钓鱼
-        流程：
-        1. 解析鱼饵
-        2. 检查CD和每日次数
-        3. 扣鱼饵
-        4. 判定逃跑
-        5. 按权重抽鱼
-        6. 增加经验、放入背包、更新状态
+        按当前等级与时段拆分鱼池：
+        - king_entry: 鱼王条目（不受 time 限制，但可受 entry.minLevel 限制）
+        - normal_pool: 普通鱼条目（受 time 过滤）
+        """
+        fish_map = cls._get_fish_map()
+        pool_map = cls._get_pool_map()
+
+        raw_pool = pool_map.get(use_bait_name, [])
+        if not raw_pool:
+            return None, []
+
+        king_entry: dict | None = None
+        normal_pool: list[dict] = []
+
+        for entry in raw_pool:
+            fish_name = entry.get("fish", "")
+            fish_info = fish_map.get(fish_name)
+            if not fish_info:
+                logger.warning(f"fish_pool.json 中的鱼 {fish_name} 未在 fish.json 中定义")
+                continue
+
+            weight = int(entry.get("weight", 0))
+            if weight <= 0:
+                continue
+
+            entry_is_king = bool(entry.get("isKing", False)) or bool(fish_info.get("isKing", False))
+
+            if entry_is_king:
+                # 鱼王：不受时段限制，但仍允许配 entry.minLevel
+                required_level = int(entry.get("minLevel", 0))
+                if user_level < required_level:
+                    continue
+
+                if king_entry is None:
+                    king_entry = entry
+                else:
+                    logger.warning(f"{use_bait_name} 鱼池中存在多个鱼王条目，当前仅取第一个：{king_entry.get('fish')}")
+                continue
+
+            # 普通鱼：优先使用 entry.minLevel，否则回退到 fish.level * 20
+            required_level = int(entry.get("minLevel", int(fish_info.get("level", 0)) * 20))
+            if user_level < required_level:
+                continue
+
+            time_rule = entry.get("time", "all")
+            if not cls._match_time_rule(time_rule):
+                continue
+
+            normal_pool.append(entry)
+
+        return king_entry, normal_pool
+
+    @classmethod
+    async def _roll_one(cls, use_bait_name: str, bait_info: dict, user_level: int) -> dict:
+        """
+        单次钓鱼逻辑：
+        1. 先判定逃跑
+        2. 再独立判定鱼王（固定 kingRate）
+        3. 没中鱼王时，再从当前时段普通池按权重抽
+        4. 幸运触发则同鱼 ×5
+
+        返回:
+        {
+            "ok": True/False,
+            "escaped": True/False,
+            "fish": fish_name or "",
+            "count": 0/1/5,
+            "exp": total_exp,
+            "isKing": bool,
+            "lucky": bool
+        }
+        """
+        system_map = cls._get_system_map()
+        fish_map = cls._get_fish_map()
+
+        king_entry, normal_pool = await cls._split_pool(use_bait_name, user_level)
+
+        # 如果连鱼王也没有、普通池也没有，说明当前池彻底不可用
+        if king_entry is None and not normal_pool:
+            return {
+                "ok": False,
+                "escaped": False,
+                "fish": "",
+                "count": 0,
+                "exp": 0,
+                "isKing": False,
+                "lucky": False,
+            }
+
+        # 先判定逃跑
+        escape_rate = float(bait_info.get("escapeRate", system_map.get("defaultEscapeRate", 0.2)))
+        if random.random() < escape_rate:
+            return {
+                "ok": True,
+                "escaped": True,
+                "fish": "",
+                "count": 0,
+                "exp": 0,
+                "isKing": False,
+                "lucky": False,
+            }
+
+        result_fish_name = ""
+        result_fish_info = None
+        is_king = False
+
+        # 鱼王独立判定：任何时段固定 0.8%（或未来活动倍率）
+        if king_entry is not None and random.random() < cls._get_effective_king_rate():
+            result_fish_name = king_entry["fish"]
+            result_fish_info = fish_map.get(result_fish_name)
+            is_king = True
+        else:
+            # 没中鱼王，则从普通池抽
+            if not normal_pool:
+                # 理论上很少见：当前时段没有普通鱼，但鱼王也没中
+                return {
+                    "ok": True,
+                    "escaped": False,
+                    "fish": "",
+                    "count": 0,
+                    "exp": 0,
+                    "isKing": False,
+                    "lucky": False,
+                }
+
+            population = [x["fish"] for x in normal_pool]
+            weights = [int(x["weight"]) for x in normal_pool]
+            result_fish_name = random.choices(population=population, weights=weights, k=1)[0]
+            result_fish_info = fish_map.get(result_fish_name)
+
+        if not result_fish_info:
+            return {
+                "ok": False,
+                "escaped": False,
+                "fish": "",
+                "count": 0,
+                "exp": 0,
+                "isKing": False,
+                "lucky": False,
+            }
+
+        lucky_rate = float(system_map.get("luckyFiveRate", 0.012))
+        lucky = random.random() < lucky_rate
+        fish_count = 5 if lucky else 1
+
+        exp_per_fish = int(result_fish_info.get("exp", 0))
+        total_exp = exp_per_fish * fish_count
+
+        return {
+            "ok": True,
+            "escaped": False,
+            "fish": result_fish_name,
+            "count": fish_count,
+            "exp": total_exp,
+            "isKing": is_king,
+            "lucky": lucky,
+        }
+
+    @classmethod
+    async def fish(cls, uid: str, bait_name: str = "", num: int = 1) -> str:
+        """
+        批量钓鱼：
+        - 普通鱼饵批量：一次消耗 num 个鱼饵，执行 num 次钓鱼
+        - 每次成功若触发 luckyFiveRate，则同鱼 ×5
+        - 每次钓鱼都计入 dailyCount
+        - 整批钓鱼只进入一次 CD
         """
         bait_map = cls._get_bait_map()
         fish_map = cls._get_fish_map()
-        pool_map = cls._get_pool_map()
         system_map = cls._get_system_map()
 
-        if not bait_map or not fish_map or not pool_map or not system_map:
+        if not bait_map or not fish_map or not system_map:
             logger.warning("fish 失败：钓鱼配置未正确加载")
             return cls._t("fishing", "configError", "❌ 钓鱼配置加载失败，请联系管理员")
+
+        if num <= 0:
+            num = 1
 
         bait_data = await cls.resolve_bait(uid, bait_name)
         if not bait_data:
@@ -148,20 +366,18 @@ class CFishingManager:
         bait_info = bait_data["info"]
         bait_item_key = bait_data["itemKey"]
 
-        # 用户等级
         level_info = await g_pDBService.user.getUserLevelByUid(uid)
         user_level = level_info[0] if isinstance(level_info, tuple) and len(level_info) >= 1 else 0
         if user_level < 0:
             user_level = 0
 
-        # 每日次数 + CD 检查
         state = await g_pDBService.userFishingState.getStateByUid(uid)
         now_dt = g_pToolManager.dateTime()
         today_str = now_dt.strftime("%Y-%m-%d")
         now_ts = int(time.time())
 
         cooldown_seconds = int(system_map.get("cooldownSeconds", 20))
-        daily_limit = int(system_map.get("dailyLimit", 10))
+        daily_limit = int(system_map.get("dailyLimit", 30))
 
         last_fish_ts = int(state.get("lastFishTs", 0)) if state else 0
         daily_date = str(state.get("dailyDate", "")) if state else ""
@@ -177,109 +393,111 @@ class CFishingManager:
                 sec=remain_cd
             )
 
-        if daily_count >= daily_limit:
+        remain_daily = daily_limit - daily_count
+        if remain_daily <= 0:
             return cls._t("fishing", "dailyLimit", "📅 你今天的钓鱼次数已经用完啦，明天再来吧")
 
-        # 再次确认背包里鱼饵数量足够
         current_bait_count = await g_pDBService.userItem.getUserItemByName(uid, bait_item_key)
         if current_bait_count is None or current_bait_count <= 0:
             return cls._t("fishing", "noBait", "🪱 你没有可用的鱼饵，先去物品商店看看吧")
 
-        # 构造鱼池
-        raw_pool = pool_map.get(use_bait_name, [])
-        if not raw_pool:
-            logger.warning(f"fish 失败：鱼池 {use_bait_name} 不存在或为空")
-            return cls._t("fishing", "emptyPool", "❌ 当前鱼池为空，请联系管理员检查配置")
+        actual_num = min(num, remain_daily, current_bait_count)
+        if actual_num <= 0:
+            return cls._t("fishing", "noBait", "🪱 你没有可用的鱼饵，先去物品商店看看吧")
 
-        available_pool: list[dict] = []
-        for entry in raw_pool:
-            fish_name = entry.get("fish", "")
-            fish_info = fish_map.get(fish_name)
-            if not fish_info:
-                logger.warning(f"fish_pool.json 中的鱼 {fish_name} 未在 fish.json 中定义")
-                continue
-
-            # 第一版：按 fish.level * 20 设置最低等级门槛
-            required_level = int(fish_info.get("level", 0)) * 20
-            if user_level < required_level:
-                continue
-
-            weight = int(entry.get("weight", 0))
-            if weight <= 0:
-                continue
-
-            available_pool.append(entry)
-
-        if not available_pool:
-            return cls._t("fishing", "noAvailableFish", "🎣 当前鱼饵暂无可钓鱼种，请提升等级后再来试试")
+        # 先检查至少存在一种可能鱼（鱼王或普通鱼）
+        king_entry, normal_pool = await cls._split_pool(use_bait_name, user_level)
+        if king_entry is None and not normal_pool:
+            return cls._t("fishing", "noAvailableFish", "🎣 当前鱼饵在这个时段暂无可钓鱼种，请换个时间再来试试")
 
         # 先扣鱼饵
-        if not await g_pDBService.userItem.addUserItemByUid(uid, bait_item_key, -1):
+        if not await g_pDBService.userItem.addUserItemByUid(uid, bait_item_key, -actual_num):
             return cls._t("fishing", "consumeError", "❌ 扣除鱼饵失败，请稍后重试")
 
-        # 逃跑判定
-        escape_rate = float(bait_info.get("escapeRate", system_map.get("defaultEscapeRate", 0.2)))
-        if random.random() < escape_rate:
-            ok = await g_pDBService.userFishingState.upsertStateByUid(
-                uid=uid,
-                lastFishTs=now_ts,
-                dailyDate=today_str,
-                dailyCount=daily_count + 1,
-            )
-            if not ok:
-                logger.warning(f"用户 {uid} 钓鱼逃跑后更新状态失败")
+        fish_counter: dict[str, int] = {}
+        total_exp = 0
+        escape_count = 0
+        lucky_count = 0
+        king_count = 0
+        empty_count = 0  # 当前时段普通池为空且鱼王未中时的空竿次数
 
-            return cls._t(
-                "fishing",
-                "escape",
-                "🐟 你使用了{name}，静静等待了一会儿……可惜鱼逃走了",
-            ).format(name=use_bait_name)
+        for _ in range(actual_num):
+            roll = await cls._roll_one(use_bait_name, bait_info, user_level)
 
-        # 按权重抽鱼
-        population = [x["fish"] for x in available_pool]
-        weights = [int(x["weight"]) for x in available_pool]
-        result_fish_name = random.choices(population=population, weights=weights, k=1)[0]
+            if not roll["ok"]:
+                continue
 
-        result_fish_info = fish_map.get(result_fish_name)
-        if not result_fish_info:
-            logger.warning(f"fish 抽中鱼 {result_fish_name} 但 fish.json 中不存在")
-            return cls._t("fishing", "drawError", "❌ 抽鱼失败，请联系管理员检查配置")
+            if roll["escaped"]:
+                escape_count += 1
+                continue
 
-        exp_gain = int(result_fish_info.get("exp", 0))
+            fish_name = roll["fish"]
+            fish_num = int(roll["count"])
+            if not fish_name or fish_num <= 0:
+                empty_count += 1
+                continue
+
+            total_exp += int(roll["exp"])
+            fish_counter[fish_name] = fish_counter.get(fish_name, 0) + fish_num
+
+            if roll["lucky"]:
+                lucky_count += 1
+            if roll["isKing"]:
+                king_count += 1
+
+        # 发放鱼获
+        for fish_name, cnt in fish_counter.items():
+            await g_pDBService.userItem.addUserItemByUid(uid, cls._fish_item_key(fish_name), cnt)
+
+        # 加经验
         current_exp = await g_pDBService.user.getUserExpByUid(uid)
         if current_exp < 0:
             current_exp = 0
-
-        # 加经验
-        if not await g_pDBService.user.updateUserExpByUid(uid, current_exp + exp_gain):
-            logger.warning(f"用户 {uid} 增加钓鱼经验失败")
-
-        # 鱼放入背包
-        fish_item_key = cls._fish_item_key(result_fish_name)
-        if not await g_pDBService.userItem.addUserItemByUid(uid, fish_item_key, 1):
-            logger.warning(f"用户 {uid} 钓鱼入库失败：{result_fish_name}")
+        await g_pDBService.user.updateUserExpByUid(uid, current_exp + total_exp)
 
         # 更新状态
-        if not await g_pDBService.userFishingState.upsertStateByUid(
+        await g_pDBService.userFishingState.upsertStateByUid(
             uid=uid,
             lastFishTs=now_ts,
             dailyDate=today_str,
-            dailyCount=daily_count + 1,
-        ):
-            logger.warning(f"用户 {uid} 钓鱼后更新状态失败")
+            dailyCount=daily_count + actual_num,
+        )
 
-        if result_fish_info.get("isKing", False):
-            return cls._t(
-                "fishing",
-                "successKing",
-                "👑 你使用了{name}，水面忽然泛起异光！\n竟然钓到了一条【{fish}】！\n✨ 经验 +{exp}",
-            ).format(name=use_bait_name, fish=result_fish_name, exp=exp_gain)
+        lines = [
+            f"🎣 本次使用【{use_bait_name}】×{actual_num}",
+            f"🌊 空军：{escape_count} 次",
+        ]
 
-        return cls._t(
-            "fishing",
-            "success",
-            "🐟 你使用了{name}，静静等待后……\n哇！你钓到了一条【{fish}】！\n✨ 经验 +{exp}",
-        ).format(name=use_bait_name, fish=result_fish_name, exp=exp_gain)
+        if empty_count > 0:
+            lines.append(f"🎐 时段空竿：{empty_count} 次")
+
+        if lucky_count > 0:
+            lines.append(f"✨ 运气特别好：{lucky_count} 次（同鱼 ×5）")
+
+        if king_count > 0:
+            lines.append(f"👑 鱼王次数：{king_count}")
+
+        lines.append(f"📈 总经验：+{total_exp}")
+
+        if fish_counter:
+            lines.append("🐟 鱼获：")
+            sorted_items = sorted(
+                fish_counter.items(),
+                key=lambda x: (
+                    -int(fish_map.get(x[0], {}).get("level", 0)),
+                    -int(fish_map.get(x[0], {}).get("sellPoint", 0)),
+                    x[0],
+                ),
+            )
+            for fish_name, cnt in sorted_items:
+                lines.append(f"- {fish_name} ×{cnt}")
+        else:
+            lines.append("🤷 本次什么也没钓到")
+
+        if actual_num < num:
+            lines.append(f"⚠️ 实际只执行了 {actual_num} 次（受鱼饵数量或每日次数限制）")
+
+        return "\n".join(lines)
 
     @classmethod
     async def getUserBaitByUid(cls, uid: str) -> bytes:
