@@ -1,9 +1,12 @@
 {
   "version": 0.01,
   "system": {
-    "dailyLimit": 10,
+    "dailyLimit": 22,
     "cooldownSeconds": 20,
     "defaultUseStrategy": "lowest_level",
-    "defaultEscapeRate": 0.2
+    "defaultEscapeRate": 0.1,
+    "luckyFiveRate": 0.012,
+    "kingRate": 0.008,
+    "kingRateMultiplier": 1.0
   }
 }
